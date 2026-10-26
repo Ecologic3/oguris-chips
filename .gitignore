@@ -1,0 +1,9 @@
+*.apk
+*.keystore
+*.idsig
+build/
+build-test/
+renders/
+icon/
+*.local.md
+.DS_Store
