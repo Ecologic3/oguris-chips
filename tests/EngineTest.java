@@ -28,6 +28,9 @@ public class EngineTest {
 
     public static void main(String[] args) {
         testHoldemBlindsAndOrder();
+        testFirstHandButton();
+        testAllInRunout();
+        testSettlementCarry();
         testHoldemMinRaise();
         testHeadsUp();
         testEffectiveBoards();
@@ -61,6 +64,82 @@ public class EngineTest {
         ok(e.street == Street.FLOP, "flop after preflop closes");
         eq(e.pot, 40, "pot 40 after preflop");
         eq(e.toActSeat, 2, "SB acts first on flop");
+    }
+
+    static void testFirstHandButton() {
+        // a fresh session (buttonSeat still 0) must put the first button on the lowest seat
+        Engine e = new Engine();
+        e.game = Game.HOLDEM; e.sb = 5; e.bb = 10;
+        e.addPlayer("Anna", 1, 500); e.addPlayer("Boris", 2, 500);
+        e.addPlayer("Cecil", 3, 500); e.addPlayer("Dana", 4, 500);
+        e.startHand();
+        eq(e.buttonSeat, 1, "first hand of a session: button on seat 1");
+    }
+
+    static void testAllInRunout() {
+        // everyone all-in except one caller with chips behind: no empty checks,
+        // the hand runs straight out to showdown
+        Engine e = new Engine();
+        e.game = Game.HOLDEM; e.sb = 5; e.bb = 10;
+        e.addPlayer("Anna", 1, 500); e.addPlayer("Boris", 2, 500); e.addPlayer("Cecil", 3, 2000);
+        e.startHand(); // button seat 1, SB seat 2, BB seat 3, button acts first (3-handed)
+        e.actRaiseTo(500);                       // Anna shoves
+        eq(e.toActSeat, 2, "SB still gets the call/fold decision facing the shove");
+        e.actCheckCall();                        // Boris calls all-in
+        e.actCheckCall();                        // Cecil calls, keeps 1500 behind
+        ok(e.street == Street.SHOWDOWN, "all-in hand runs out to showdown with no checks asked");
+        eq(e.toActSeat, 0, "nobody to act at showdown");
+        eq(e.totalPot(), 1500, "pot holds all three 500s");
+
+        // heads-up: BB is all-in just by posting the blind; after SB completes,
+        // the hand must run out instead of SB checking down three streets
+        Engine h = new Engine();
+        h.game = Game.HOLDEM; h.sb = 5; h.bb = 10;
+        h.addPlayer("Anna", 1, 100); h.addPlayer("Boris", 2, 8);
+        h.startHand(); // button seat 1 posts SB 5, Boris posts BB all-in for 8
+        eq(h.toActSeat, 1, "SB still decides whether to complete");
+        h.actCheckCall();                        // Anna completes to 8
+        ok(h.street == Street.SHOWDOWN, "HU all-in blind: hand runs out at once");
+        eq(h.playerAtSeat(1).stack, 92, "SB stack 100 - 8");
+        eq(h.totalPot(), 16, "pot is 8 + 8");
+
+        // bomb pot: two players all-in on the flop, big stack calls -> showdown at once
+        Engine o = new Engine();
+        o.game = Game.OMAHA_BOMB; o.ante = 25; o.boards = 2;
+        o.addPlayer("Anna", 1, 100); o.addPlayer("Boris", 2, 100); o.addPlayer("Cecil", 3, 1000);
+        o.startHand(); // antes paid, flop betting starts left of the button
+        eq(o.toActSeat, 2, "bomb pot: first actor left of button");
+        o.actRaiseTo(75);                        // Boris bets the pot, all-in
+        o.actCheckCall();                        // Cecil calls
+        o.actCheckCall();                        // Anna calls all-in
+        ok(o.street == Street.SHOWDOWN, "bomb pot all-ins run out to showdown");
+        eq(o.toActSeat, 0, "bomb pot: nobody to act at showdown");
+    }
+
+    static void testSettlementCarry() {
+        // a chopped pot with odd bets leaves odd chips in the carry; the
+        // settlement must hand them to somebody or the books come up short
+        Engine e = new Engine();
+        e.game = Game.HOLDEM; e.sb = 5; e.bb = 10;
+        e.addPlayer("Anna", 1, 500); e.addPlayer("Boris", 2, 500); e.addPlayer("Cecil", 3, 500);
+        e.startHand();                    // button 1, SB Boris 5, BB Cecil 10
+        e.actRaiseTo(333);                // Anna bets an odd, typed amount
+        eq(e.toActSeat, 2, "SB to act after the raise");
+        e.actFold();                      // Boris folds
+        e.actCheckCall();                 // Cecil calls
+        while (e.street != Street.SHOWDOWN) e.actCheckCall();   // check it down
+        List<Set<Integer>> w = new ArrayList<Set<Integer>>();
+        Set<Integer> s = new HashSet<Integer>(); s.add(1); s.add(3); w.add(s);
+        e.awardShowdown(w);               // Anna and Cecil chop
+        eq(e.carry, 11, "odd chips from the chop sit in the carry");
+        ok(e.carryRecipient() != null && "Anna".equals(e.carryRecipient().name),
+                "carry goes to the best net, ties by lowest seat");
+        List<Engine.Transfer> ts = e.settlement();
+        int paid = 0; for (Engine.Transfer t : ts) paid += t.amount;
+        eq(paid, 8, "settlement pays out every lost koruna (5 + 3, carry included)");
+        int balanced = 0;
+        for (Player p : e.players) balanced += p.stack - p.totalIn + (p == e.carryRecipient() ? e.carry : 0);
+        eq(balanced, 0, "nets plus the carry sum to zero");
     }
 
     static void testHoldemMinRaise() {

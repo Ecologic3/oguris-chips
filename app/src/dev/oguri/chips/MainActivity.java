@@ -965,6 +965,14 @@ public class MainActivity extends Activity {
             c.addView(row);
         }
         root.addView(c);
+        Player carryRcpt = engine.carryRecipient();
+        if (carryRcpt != null) {
+            TextView note = tv("Odd chips from split pots: " + TableView.fmt(engine.carry)
+                    + " goes to " + carryRcpt.name + " — already counted in the settlement below",
+                    12.5f, DIM, false);
+            note.setPadding(dp(2), dp(8), dp(2), 0);
+            root.addView(note);
+        }
         root.addView(label("Who pays whom"));
         LinearLayout sc = card();
         List<Engine.Transfer> ts = engine.settlement();
@@ -990,6 +998,9 @@ public class MainActivity extends Activity {
                       .append(", stack ").append(pl.stack)
                       .append(", net ").append(net > 0 ? "+" : "").append(net).append("\n");
                 }
+                Player rc = engine.carryRecipient();
+                if (rc != null) sb.append("Odd chips from split pots: ").append(engine.carry)
+                        .append(" to ").append(rc.name).append("\n");
                 sb.append("Settlement:\n");
                 for (Engine.Transfer t : engine.settlement()) sb.append(t.toString()).append("\n");
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);

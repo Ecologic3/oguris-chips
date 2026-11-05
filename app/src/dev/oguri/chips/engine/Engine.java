@@ -107,7 +107,7 @@ public class Engine {
     private Player nextInOrder(int afterSeat, List<Player> set) {
         if (set.isEmpty()) return null;
         List<Player> s = bySeat();
-        int start = 0;
+        int start = -1;   // unknown seat (e.g. no button yet): scan starts at the lowest seat
         for (int i = 0; i < s.size(); i++) if (s.get(i).seat == afterSeat) { start = i; break; }
         for (int k = 1; k <= s.size(); k++) {
             Player cand = s.get((start + k) % s.size());
@@ -237,7 +237,17 @@ public class Engine {
     }
 
     private boolean needsAction(Player p) {
-        return p.inHand && !p.folded && p.stack > 0 && (!p.acted || p.streetBet < currentBet);
+        if (!p.inHand || p.folded || p.stack == 0) return false;
+        if (p.streetBet < currentBet) return true;   // facing a bet: always a real decision
+        if (p.acted) return false;
+        // Matched the bet but not yet acted (the big-blind option, or first to
+        // act on a fresh street). That is only a real decision if another live
+        // player still has chips and could respond to a bet. When everyone
+        // else is all-in, checking is the only possible move and a bet could
+        // never be called, so the hand runs out instead of asking for checks.
+        for (Player q : players)
+            if (q != p && q.inHand && !q.folded && q.stack > 0) return true;
+        return false;
     }
 
     private Player nextNeedingAction(int afterSeat) {
@@ -467,12 +477,33 @@ public class Engine {
         public Transfer(String f, String t, int a) { from = f; to = t; amount = a; }
         public String toString() { return from + " → " + to + " " + amount; }
     }
+    /**
+     * Who receives the leftover carry chips in a settlement: the player with
+     * the highest net (ties broken by lowest seat), the usual odd-chip rule.
+     * Null when there is no carry waiting.
+     */
+    public Player carryRecipient() {
+        if (carry <= 0) return null;
+        Player best = null;
+        for (Player p : bySeat()) {
+            if (best == null || p.stack - p.totalIn > best.stack - best.totalIn) best = p;
+        }
+        return best;
+    }
+
     public List<Transfer> settlement() {
         ArrayList<Player> debtors = new ArrayList<Player>(), creditors = new ArrayList<Player>();
         java.util.Map<Player, Integer> net = new java.util.HashMap<Player, Integer>();
+        for (Player p : players) net.put(p, p.stack - p.totalIn);
+        // The carry is real money still on the table: odd chips from split
+        // pots that could not be divided evenly in 5s, waiting for the next
+        // hand's pot. A settlement that ignores it comes up short by exactly
+        // that amount, so credit it to the carry recipient and the books
+        // always balance to zero.
+        Player rcpt = carryRecipient();
+        if (rcpt != null) net.put(rcpt, net.get(rcpt) + carry);
         for (Player p : players) {
-            int n = p.stack - p.totalIn;
-            net.put(p, n);
+            int n = net.get(p);
             if (n < 0) debtors.add(p); else if (n > 0) creditors.add(p);
         }
         ArrayList<Transfer> out = new ArrayList<Transfer>();
