@@ -31,6 +31,8 @@ public class EngineTest {
         testFirstHandButton();
         testAllInRunout();
         testSettlementCarry();
+        testShortAllInNoReopen();
+        testMultiBoardSidePotFallback();
         testHoldemMinRaise();
         testHeadsUp();
         testEffectiveBoards();
@@ -140,6 +142,67 @@ public class EngineTest {
         int balanced = 0;
         for (Player p : e.players) balanced += p.stack - p.totalIn + (p == e.carryRecipient() ? e.carry : 0);
         eq(balanced, 0, "nets plus the carry sum to zero");
+    }
+
+    static void testShortAllInNoReopen() {
+        // a short all-in raise must not reopen the betting for players who
+        // already acted on this street; a full raise must reopen it
+        Engine e = new Engine();
+        e.game = Game.HOLDEM; e.sb = 5; e.bb = 10;
+        e.addPlayer("Anna", 1, 500); e.addPlayer("Boris", 2, 500);
+        e.addPlayer("Cecil", 3, 500); e.addPlayer("Dana", 4, 160);
+        e.buttonSeat = 4; // first hand button -> seat 1
+        e.startHand();
+        e.actCheckCall(); // Dana (UTG) calls 10, 150 behind
+        e.actCheckCall(); // Anna calls
+        e.actCheckCall(); // Boris completes
+        e.actCheckCall(); // Cecil checks -> flop, Boris first
+        ok(e.street == Street.FLOP, "flop reached");
+        e.actRaiseTo(100); // Boris bets 100
+        e.actCheckCall();  // Cecil calls
+        e.actRaiseTo(150); // Dana shoves 150: short raise, increment 50 < 100
+        eq(e.toActSeat, 1, "action back to Anna, who has not acted on the flop");
+        ok(e.playerAtSeat(1).canRaise, "a player yet to act may still raise");
+        e.actFold();       // Anna folds
+        e.actCheckCall();  // Boris calls the extra 50
+        eq(e.toActSeat, 3, "Cecil faces the short shove");
+        ok(!e.playerAtSeat(3).canRaise, "short all-in does not reopen for the earlier caller");
+        e.actCheckCall();  // Cecil calls -> turn
+        ok(e.street == Street.TURN, "turn reached");
+        e.actRaiseTo(100); // Boris bets 100 on the turn
+        e.actRaiseTo(300); // Cecil makes a full raise (increment 200 >= 100)
+        ok(e.playerAtSeat(2).canRaise, "a full raise reopens the betting");
+        e.actCheckCall();  // Boris calls -> river
+        ok(e.street == Street.RIVER, "river reached");
+    }
+
+    static void testMultiBoardSidePotFallback() {
+        // KNOWN COMPROMISE, pinned on purpose: winners are tapped per board,
+        // not per side pot. If a board's winner is all-in short and cannot
+        // win an upper side-pot layer, that layer's share for the board is
+        // split among the players who CAN win it, rather than going to the
+        // best hand among them (the app never learns their relative hands).
+        Engine e = new Engine();
+        e.game = Game.OMAHA_BOMB; e.ante = 25; e.boards = 2;
+        e.addPlayer("Xena", 1, 100); e.addPlayer("Yann", 2, 500); e.addPlayer("Zed", 3, 500);
+        e.buttonSeat = 3; // first hand button -> seat 1
+        e.startHand();                    // antes in, flop betting starts at seat 2
+        e.actRaiseTo(75);                 // Yann bets the pot
+        e.actCheckCall();                 // Zed calls
+        e.actCheckCall();                 // Xena calls all-in (100 total in)
+        e.actRaiseTo(300);                // turn: Yann bets 300
+        e.actCheckCall();                 // Zed calls
+        e.actRaiseTo(100);                // river: Yann all-in (500 total in)
+        e.actCheckCall();                 // Zed calls all-in -> showdown
+        ok(e.street == Street.SHOWDOWN, "bomb pot reaches showdown");
+        List<Set<Integer>> w = new ArrayList<Set<Integer>>();
+        Set<Integer> b1 = new HashSet<Integer>(); b1.add(1); w.add(b1); // Xena wins board 1
+        Set<Integer> b2 = new HashSet<Integer>(); b2.add(2); w.add(b2); // Yann wins board 2
+        e.awardShowdown(w);
+        eq(e.playerAtSeat(1).stack, 150, "short stack takes board 1's share of the main pot");
+        eq(e.playerAtSeat(2).stack, 750, "board 2 winner plus half the orphaned upper layer");
+        eq(e.playerAtSeat(3).stack, 200, "other half of the orphaned upper layer");
+        eq(e.totalChipsInSession(), 1100, "chips conserved through the fallback split");
     }
 
     static void testHoldemMinRaise() {

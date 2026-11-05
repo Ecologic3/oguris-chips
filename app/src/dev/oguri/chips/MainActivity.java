@@ -19,6 +19,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -177,6 +178,11 @@ public class MainActivity extends Activity {
         return u;
     }
     void refresh() {
+        // Undo can rewind a finished hand back into live betting; the
+        // showdown screen must not linger then, because its Award button
+        // would settle a pot that is still being played for.
+        if (screen.equals("showdown") && engine.handInProgress
+                && engine.street != Street.SHOWDOWN) { showTable(); return; }
         if (screen.equals("setup")) showSetup();
         else if (screen.equals("prehand")) showPreHand();
         else if (screen.equals("table")) showTable();
@@ -228,7 +234,14 @@ public class MainActivity extends Activity {
             c.addView(tv("Resume exactly where you left it — stacks, seats, everything.", 12.5f, DIM, false));
             Button resume = btn("Resume saved game", GREEN, Color.WHITE, 15);
             resume.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) { loadGame(); toast("Game loaded"); showPreHand(); }
+                public void onClick(View v) {
+                    try { loadGame(); toast("Game loaded"); showPreHand(); }
+                    catch (Exception ex) {
+                        prefs().edit().remove("save").apply();
+                        toast("Saved game was damaged — cleared it, start fresh");
+                        showSetup();
+                    }
+                }
             });
             LinearLayout.LayoutParams rp = lpw(); rp.setMargins(0, dp(8), 0, 0);
             c.addView(resume, rp);
@@ -658,7 +671,26 @@ public class MainActivity extends Activity {
         actions.addView(raiseBtn, ap); actions.addView(cc, ap2); actions.addView(fold, ap3);
         root.addView(actions);
 
-        if (raiseOpen) root.addView(raisePanel(actor));
+        if (raiseOpen) {
+            // bottom sheet: the panel floats over the foot of the screen so
+            // the slider and confirm button are always in reach — the table
+            // keeps its full size and nothing scrolls (no dim layer either)
+            ScrollView sv = scrollWrap(root);
+            FrameLayout frame = new FrameLayout(this);
+            frame.setBackgroundColor(BG);
+            frame.addView(sv, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            LinearLayout panel = raisePanel(actor);
+            FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            fp.gravity = Gravity.BOTTOM;
+            fp.setMargins(dp(12), 0, dp(12), dp(12));
+            panel.setLayoutParams(fp);
+            panel.setElevation(dp(12));
+            frame.addView(panel);
+            setContentView(frame);
+            return;
+        }
         setContentView(scrollWrap(root));
     }
     ScrollView scrollWrap(LinearLayout root) {
@@ -703,16 +735,19 @@ public class MainActivity extends Activity {
         if (raiseVal < min) raiseVal = min;
         if (raiseVal > max) raiseVal = max;
         final boolean opening = engine.currentBet == 0;
-        panel.addView(tv(opening ? "Bet — " + actor.name : "Raise — " + actor.name, 18, TXT, true));
-        // the minimum-raise rule, spelled out for this exact situation
-        String rule;
-        if (opening) rule = "Minimum opening bet is " + fullMin
-                + (engine.game == Game.OMAHA_BOMB ? " (the ante). Maximum " : " (the big blind). Maximum ") + max + ".";
-        else if (max < fullMin) rule = "A full minimum raise would be to " + fullMin + ", but your whole stack only reaches "
-                + max + " — going all-in short is allowed.";
-        else rule = "Minimum raise to " + fullMin + " — current bet " + engine.currentBet
-                + " plus the last raise of " + (fullMin - engine.currentBet) + ". Maximum " + max + ".";
-        panel.addView(tv(rule, 13.5f, 0xFFC79A3F, false));
+        // header row: title left, the min/max for this exact situation right
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(tv(opening ? "Bet — " + actor.name : "Raise — " + actor.name, 18, TXT, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        head.addView(tv((opening ? "Min bet " : "Min raise to ") + fullMin + " · max " + max,
+                12.5f, 0xFFC79A3F, true));
+        panel.addView(head);
+        // the one case the one-liner cannot explain: the stack cannot reach a full min-raise
+        if (max < fullMin) panel.addView(tv("A full minimum raise would be to " + fullMin
+                + ", but your whole stack only reaches " + max + " — going all-in short is allowed.",
+                13, 0xFFC79A3F, false));
 
         // controls are created first and wired together below (slider <-> number field)
         final boolean[] syncing = {false};
@@ -791,7 +826,6 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams sbp = lpw(); sbp.setMargins(0, dp(6), 0, 0);
         panel.addView(sb, sbp);
-        panel.addView(tv("Type the amount, tap the slider where you want it, drag it, or use −/+.", 12, DIM, false));
 
         // typing in the field drives the slider and the confirm button
         amt.addTextChangedListener(new TextWatcher() {

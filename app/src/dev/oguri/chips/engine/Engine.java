@@ -355,6 +355,12 @@ public class Engine {
             for (Player q : players) if (q != p && q.inHand && !q.folded) {
                 q.acted = false; q.canRaise = true;
             }
+        } else {
+            // a short all-in raise does not reopen the betting: anyone who
+            // has already acted on this street may only call or fold to it
+            for (Player q : players) if (q != p && q.inHand && !q.folded && q.acted) {
+                q.canRaise = false;
+            }
         }
         p.acted = true; p.canRaise = false;
         afterAction(p);
